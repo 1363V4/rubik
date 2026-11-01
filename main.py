@@ -6,6 +6,7 @@
 Environment:
     PUBLIC_URL=https://paint.example.com   URL encoded in the /master QR code
                                            (default: derived from the request's Host header)
+    REVOLUT_URL=https://revolut.me/...     where the master's "Cheers" button sends everyone
     RELOAD=1                               development auto-reload
 """
 
@@ -35,6 +36,10 @@ SOLVED = {"up": "w", "down": "y", "front": "g", "back": "b", "left": "o", "right
 CELLS = {
     str(i): i for i in range(9)
 }  # path segment -> sticker index (ASCII digits only)
+REVOLUT_URL = (
+    "https://revolut.me/legires?currency=EUR&amount=500&note=Triple%20au%20Triplex"
+)
+CHEERS_DELAY_MS = 2500  # how long the "Cheers!" message shows before the redirect
 HEARTBEAT = 25  # seconds; re-sends the snapshot so idle proxies keep the stream open
 
 
@@ -43,6 +48,7 @@ class Room:
 
     def __init__(self):
         self.faces = self.solved()
+        self.cheers = 0  # bumped on every "Cheers"; a stream reacts when it differs from the value it saw on connect
         self.subscribers = set()
 
     @staticmethod
@@ -57,6 +63,10 @@ class Room:
 
     def reset(self):
         self.faces = self.solved()
+        self.publish()
+
+    def celebrate(self):
+        self.cheers += 1
         self.publish()
 
     def publish(self):
@@ -107,10 +117,16 @@ rubik-cube{position:absolute;inset:0;display:block}
 .side p{margin:0;color:var(--mute);max-width:26ch}
 .qr{width:min(100%,56vh);line-height:0;border:1px solid var(--line);border-radius:1rem;overflow:hidden}
 .qr svg{display:block;width:100%;height:auto}
-.reset{margin-top:.5rem;padding:.7rem 1.4rem;border:1px solid var(--line);border-radius:999px;background:var(--panel);
+.actions{display:flex;flex-wrap:wrap;justify-content:center;gap:.75rem;margin-top:.5rem}
+.btn{padding:.7rem 1.4rem;border:1px solid var(--line);border-radius:999px;background:var(--panel);
   color:var(--ink);font:inherit;font-size:1.05rem;cursor:pointer}
-.reset:hover{background:var(--bg)}
-.reset:focus-visible{outline:3px solid #0046ad;outline-offset:2px}
+.btn:hover:not(:disabled){background:var(--bg)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:focus-visible{outline:3px solid #0046ad;outline-offset:2px}
+.cheers{position:fixed;inset:0;z-index:10;display:grid;place-content:center;gap:.5rem;text-align:center;
+  background:#fffffff2;font-size:clamp(2.2rem,9vw,4.5rem);font-weight:800}
+.cheers p{margin:0}
+.cheers .sub{font-size:1.1rem;font-weight:400;color:var(--mute)}
 .side .url{max-width:none;font-size:1rem;color:var(--ink);word-break:break-all}
 @media (max-width:800px){
   .master{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto}
@@ -142,6 +158,18 @@ def cube_html(display=False):
     attrs = "".join(f' {face}="{"".join(cells)}"' for face, cells in room.faces.items())
     variant = ' variant="display"' if display else ""
     return f'<rubik-cube id="cube"{attrs}{variant}></rubik-cube>'
+
+
+def cheers_html(active=False):
+    """Empty placeholder, or a full-screen message whose data-init redirects after a short delay.
+    The URL goes in a data attribute (escaped), never inside the expression."""
+    if not active:
+        return '<div id="cheers"></div>'
+    return (
+        f'<div id="cheers" class="cheers" role="status" data-href="{escape(REVOLUT_URL)}" '
+        f'data-init="setTimeout(() => window.location.assign(el.dataset.href), {CHEERS_DELAY_MS})">'
+        f'<p>Cheers! \U0001f942</p><p class="sub">Taking you to the tip jar...</p></div>'
+    )
 
 
 @lru_cache(maxsize=16)
@@ -188,6 +216,7 @@ async def index(request):
   <p class="hint">Drag to turn the cube. Tap a square to paint it.</p>
   <rubik-cube id="cube"></rubik-cube>
 </main>
+<div id="cheers"></div>
 <footer class="bar">
   <div class="pill">Your color: <span class="dot" style="--c:{css}"></span><strong>{name}</strong></div>
 </footer>"""
@@ -198,6 +227,7 @@ async def index(request):
 @rd.get("/master")
 async def master(request):
     url = public_url(request)
+    cheers_off = ""
     body = f"""<main class="stage" id="stage" data-init="@get('/read/master', {{openWhenHidden: true}})">
   <rubik-cube id="cube" variant="display"></rubik-cube>
 </main>
@@ -206,8 +236,12 @@ async def master(request):
   <p>Scan with your phone, get a color, and start painting.</p>
   <div class="qr">{qr_svg(url)}</div>
   <p class="url">{escape(url)}</p>
-  <button class="reset" type="button"
-    data-on:click="confirm('Reset the cube to its solved colors?') && @post('/commands/reset')">Reset cube</button>
+  <div class="actions">
+    <button class="btn" type="button"
+      data-on:click="confirm('Send everyone to the Revolut link?') && @post('/commands/cheers')"{cheers_off}>Cheers</button>
+    <button class="btn" type="button"
+      data-on:click="confirm('Reset the cube to its solved colors?') && @post('/commands/reset')">Reset cube</button>
+  </div>
 </aside>"""
     return rd.html(page("Rubik master", "master", body))
 
@@ -218,8 +252,10 @@ async def master(request):
 @rd.get("/read/cube")
 async def read_cube(request):
     async with room.subscribe() as wake:
+        seen = room.cheers  # read right after subscribing: only people connected at click time get redirected
         while True:
             yield rd.patch(cube_html())
+            yield rd.patch(cheers_html(room.cheers != seen))
             await wait_for_change(wake)
 
 
@@ -241,6 +277,12 @@ async def paint(request):
     # Invalid input is ignored: the stream stays the single source of truth for the UI.
     if face in room.faces and cell is not None and letter in PALETTE:
         room.paint(face, cell, letter)
+    return rd.empty()
+
+
+@rd.post("/commands/cheers")
+async def cheers(request):
+    room.celebrate()
     return rd.empty()
 
 
