@@ -228,4 +228,5 @@ async def paint(request):
 
 
 if __name__ == "__main__":
-    rd.run(reload=os.environ.get("RELOAD") == "1")
+    # rd.run(reload=os.environ.get("RELOAD") == "1")
+    rd.run(sock="/run/legovh/rubik.sock")
