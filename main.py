@@ -42,13 +42,24 @@ class Room:
     """The one shared cube: 6 faces x 9 stickers, each sticker a palette letter."""
 
     def __init__(self):
-        self.faces = {face: [letter] * 9 for face, letter in SOLVED.items()}
+        self.faces = self.solved()
         self.subscribers = set()
+
+    @staticmethod
+    def solved():
+        return {face: [letter] * 9 for face, letter in SOLVED.items()}
 
     def paint(self, face, index, letter):
         if self.faces[face][index] == letter:
             return
         self.faces[face][index] = letter
+        self.publish()
+
+    def reset(self):
+        self.faces = self.solved()
+        self.publish()
+
+    def publish(self):
         for wake in tuple(self.subscribers):
             # One pending wake-up per stream is enough: streams render the *latest* state.
             with contextlib.suppress(asyncio.QueueFull):
@@ -96,6 +107,10 @@ rubik-cube{position:absolute;inset:0;display:block}
 .side p{margin:0;color:var(--mute);max-width:26ch}
 .qr{width:min(100%,56vh);line-height:0;border:1px solid var(--line);border-radius:1rem;overflow:hidden}
 .qr svg{display:block;width:100%;height:auto}
+.reset{margin-top:.5rem;padding:.7rem 1.4rem;border:1px solid var(--line);border-radius:999px;background:var(--panel);
+  color:var(--ink);font:inherit;font-size:1.05rem;cursor:pointer}
+.reset:hover{background:var(--bg)}
+.reset:focus-visible{outline:3px solid #0046ad;outline-offset:2px}
 .side .url{max-width:none;font-size:1rem;color:var(--ink);word-break:break-all}
 @media (max-width:800px){
   .master{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto}
@@ -191,6 +206,8 @@ async def master(request):
   <p>Scan with your phone, get a color, and start painting.</p>
   <div class="qr">{qr_svg(url)}</div>
   <p class="url">{escape(url)}</p>
+  <button class="reset" type="button"
+    data-on:click="confirm('Reset the cube to its solved colors?') && @post('/commands/reset')">Reset cube</button>
 </aside>"""
     return rd.html(page("Rubik master", "master", body))
 
@@ -227,5 +244,12 @@ async def paint(request):
     return rd.empty()
 
 
+@rd.post("/commands/reset")
+async def reset(request):
+    room.reset()
+    return rd.empty()
+
+
 if __name__ == "__main__":
-    rd.run(reload=os.environ.get("RELOAD") == "1")
+    # rd.run(reload=os.environ.get("RELOAD") == "1")
+    rd.run(sock="/run/legovh/rubik.sock")
