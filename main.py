@@ -238,9 +238,9 @@ async def master(request):
   <p class="url">{escape(url)}</p>
   <div class="actions">
     <button class="btn" type="button"
-      data-on:click="confirm('Send everyone to the Revolut link?') && @post('/commands/cheers')"{cheers_off}>Cheers</button>
+      data-on:click="@post('/commands/cheers')"{cheers_off}>Cheers</button>
     <button class="btn" type="button"
-      data-on:click="confirm('Reset the cube to its solved colors?') && @post('/commands/reset')">Reset cube</button>
+      data-on:click="@post('/commands/reset')">Reset cube</button>
   </div>
 </aside>"""
     return rd.html(page("Rubik master", "master", body))
